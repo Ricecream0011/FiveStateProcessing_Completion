@@ -5,22 +5,6 @@
 #include <chrono> // for sleep
 #include <thread> // for sleep
 
-/* TO DO:
-
-1. Admitting new processes and labeling them as ready to run 
-   (new -> ready transition)
-
-2. Selecting an appropriate process to run from the set of ready processes 
-   (we will just use a first in, first out scheduler -- ready -> running transition)
-
-3. Handling running processes and what can happen while a process is running 
-   (running -> blocked and running -> exit transitions)
-
-4. Responding to interrupts that are raised when an IO operation is complete 
-   (blocked -> ready transition)
-
-*/
-
 int main(int argc, char* argv[])
 {
     // single thread processor
@@ -31,9 +15,12 @@ int main(int argc, char* argv[])
     // the ProcessMgmt object (in other words, automatically at the appropriate time)
     vector<Process> processList;
 
+    // queue to hold processes ready to run (using ProcessIDs)
+    list<int> readyProcessesList;
+
     // this will orchestrate process creation in our system, it will add processes to 
     // processList when they are created and ready to be run/managed
-    ProcessManagement processMgmt(processList);
+    ProcessManagement processMgmt(processList, readyProcessesList);
 
     // this is where interrupts will appear when the ioModule detects that an IO operation is complete
     list<IOInterrupt> interrupts;   
@@ -73,26 +60,16 @@ int main(int argc, char* argv[])
 
 
     time = 0;
-//    processorAvailable = true;
 
     // Initializing the first avaialbe process as the running process 
     // to redefine and use each time step
-    Process& runningProc = processList.front();
+    Process* runningProc = &processList.front();
 
     // keep running the loop until all processes have been added and have run to completion
     // --> Running as long as there are still running processes
-    while(processMgmt.moreProcessesComing() && !processList.empty())
+    while(processMgmt.moreProcessesComing() || !processMgmt.allFinished())
     {
-        // update what the currentProc is 
-        // by finding the first ready process in the list
-        for(int i=0; i<processList.size(); i++){
-            if (processList[i].state == ready){
-                runningProc = processList[i];
-                break;
-            }
-        }
-
-
+       
         //Update our current time step
         ++time;
 
@@ -102,74 +79,74 @@ int main(int argc, char* argv[])
         //update the status for any active IO requests
         ioModule.ioProcessing(time);
 
-        //If the processor is tied up running a process, then continue running it until it is done or blocks
-        //   note: be sure to check for things that should happen as the process continues to run (io, completion...)
-        //If the processor is free then you can choose the appropriate action to take, the choices (in order of precedence) are:
-        // - admit a new process if one is ready (i.e., take a 'newArrival' process and put them in the 'ready' state)
-        // - address an interrupt if there are any pending (i.e., update the state of a blocked process whose IO operation is complete)
-        // - start processing a ready process if there are any ready
-
-
         //init the stepAction, update below
         stepAction = noAct;
-
         
-        //TODO add in the code to take an appropriate action for this time step!
-        //you should set the action variable based on what you do this time step. you can just copy and paste the lines below and uncomment them, if you want.
-       
-       // if there is a running process
-        if(runningProc.state == processing){
-
+        // Is there a process running?
+        if(processMgmt.checkIfRunning())
+        {
             // update total time given to this process
-            runningProc.processorTime++;
+            runningProc->processorTime++;
           
-            // if the process hits one of its IOEvents, (it will hit the one first in the list, first)
-            // add the ioEvent to m_pending (pending interrupts)
-            // and block the process
-            if(runningProc.processorTime == runningProc.ioEvents.front().time){
-                ioModule.submitIORequest(time, runningProc.ioEvents.front(), runningProc);
-                runningProc.ioEvents.pop_front();
-                runningProc.state = blocked;
+            // TEST IF IOEVENT OCCURS
+            if(processMgmt.checkIOEvents(runningProc))
+            {
+                ioModule.submitIORequest(time, processMgmt.whichIOevent(runningProc), *runningProc);
+                runningProc->state = blocked;
                 stepAction = ioRequest;
+
+                // remove running process from ready list
+                readyProcessesList.pop_front();
             }
-            // or if the process has run long enough to complete, mark it as so
-            else if(runningProc.processorTime == runningProc.reqProcessorTime){
-                runningProc.state = done;
+            // TEST IF PROCESS FINISHED
+            else if(runningProc->processorTime == runningProc->reqProcessorTime)
+            {
+                runningProc->state = done;
                 stepAction = complete;
+
+                // remove running process from ready list
+                readyProcessesList.pop_front();
             }
-            else{ 
+            else // CONTINUE RUNNING
+            { 
                 stepAction = continueRun;
             }
         }
-        // OR, if there is a newly added process with the state newArrival,
-        // admit it by setting its state to ready
-        else if (processList.back().state == newArrival){
+        // Otherwise, is there a newArrival?
+        else if (processList.back().state == newArrival)
+        {
           // need to find first new element in vector which is not ready (n)
           int i=0;
-          while(processList[i].state == ready); { continue; }
-            processList[i].state = ready;
-            stepAction = admitNewProc;
+          while(processList[i].state == ready) { i++; } // increments until non-ready element ofund
+          processList[i].state = ready;
+          stepAction = admitNewProc;
+
+          // add new ready process to ready processes list
+          readyProcessesList.push_back(processList[i].id);
+
         }
-        // OR, if there is an event that has finished (interrupt generated): 
-        // find matching process to move to ready state and clear interrupt signal
-        else if (!interrupts.empty()){
-          for(Process& indexedProc : processList){
-            if((indexedProc.state == blocked) && (indexedProc.id == interrupts.front().procID)){
+        // Otherwise, has an event finished? (interrupt generated?)
+        else if (!interrupts.empty())
+        {
+          for(Process& indexedProc : processList)
+          {
+            if((indexedProc.state == blocked) && (indexedProc.id == interrupts.front().procID))
+            {
               indexedProc.state = ready;
               interrupts.pop_front();
+              readyProcessesList.push_back(indexedProc.id); // push to back of ready list
               stepAction = handleInterrupt;
               break;
             }
           }
         }
-        // OR, if the processList is not empty,
-        // set the foremost process to running
-        else if (!processList.empty()){
-            // set first process to running
-            processList.front().state = processing;
+        
+        // Otherwise, find a ready process
+        else if (processMgmt.newPtoRun(runningProc))
+        {
+            runningProc->state = processing;
             stepAction = beginRun;
         }
-
 
         // Leave the below alone (at least for final submission, we are counting on the output being in expected format)
         cout << setw(5) << time << "\t"; 

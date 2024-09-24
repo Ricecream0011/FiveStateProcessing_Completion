@@ -9,7 +9,6 @@ void ProcessManagement::readProcessFile(const string& fname)
     unsigned int ioIDctrl(0), procIDctrl(0);
     int ioTime, ioDur;
 
-    // REMINDER: m_pending is a private <vector> owned by ProcessManagement object
     m_pending.clear();
 
     if(!in.good())
@@ -25,19 +24,18 @@ void ProcessManagement::readProcessFile(const string& fname)
         ss.clear();
         ss.str(line);
 
-        proc.id = procIDctrl; // setting process ID to 0 initially
+        proc.id = procIDctrl; // setting the first process ID to 0
         ++procIDctrl;
 
-        // initializing
-        ss >> proc.arrivalTime; // first value
-        ss >> proc.reqProcessorTime; // second value
+        // initializing processor member variables
+        ss >> proc.arrivalTime;
+        ss >> proc.reqProcessorTime;
 
-        // REMINDER ioEvents is a doubly linked list (list<IOEvents) belonging to Processor objects
-        // so each process has its own set of interrupting io events
+        // this while loop pushes a process' ioevents into the back of its IOEvents list
         proc.ioEvents.clear(); 
-        while(ss >> ioTime) // third value
+        while(ss >> ioTime)
         {
-            ss >> ioDur; // fourth value
+            ss >> ioDur;
 
             proc.ioEvents.push_back(IOEvent(ioTime, ioDur, ioIDctrl));
             ++ioIDctrl;
@@ -50,10 +48,8 @@ void ProcessManagement::readProcessFile(const string& fname)
     sort(m_pending.begin(), m_pending.end(), procComp);
 }
 
+//////////////////////////////////////////////////////////
 
-// Here the m_pending list is basically being used as a reverse stack to 
-// push the released process to the back of the ready queue while also removing
-// the released pending process from the back of the vector
 void ProcessManagement::activateProcesses(const int& time)
 {
     if(m_pending.size() > 0)
@@ -64,4 +60,76 @@ void ProcessManagement::activateProcesses(const int& time)
             m_pending.pop_back();
         }
     }
+}
+
+//////////////////////////////////////////////////////////
+
+bool ProcessManagement::newPtoRun(Process*& runningProc){
+    if(m_readyList.size() != 0)
+    {
+        unsigned int rfrontID = m_readyList.front(); // ID of readyList[0]
+        for(size_t i=0; i<m_procList.size(); i++) // iterate through processList
+        {
+            if(m_procList[i].id == rfrontID)
+            {
+                runningProc = &m_procList[i];
+                return true;
+            }
+        }
+    }
+
+    runningProc = nullptr;
+    return false;
+}
+
+//////////////////////////////////////////////////////////
+
+bool ProcessManagement::checkIOEvents(Process*& runningProc){
+    for(IOEvent& indexedEvent : runningProc->ioEvents)
+    {
+        if (runningProc->processorTime == indexedEvent.time)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+//////////////////////////////////////////////////////////
+
+IOEvent& ProcessManagement::whichIOevent(Process*& runningProc)
+{
+    for(IOEvent& indexedEvent : runningProc->ioEvents)
+    {
+        if (runningProc->processorTime == indexedEvent.time)
+        {
+            return indexedEvent;
+        }
+    }
+    
+    cerr << "no ioEvent found...?" ;
+    IOEvent placeholder; // because this function must return an IOEvent reference
+    IOEvent& refHolder = placeholder;
+    return refHolder;
+}
+
+//////////////////////////////////////////////////////////
+
+bool ProcessManagement::allFinished(){
+    for(size_t i=0; i<m_procList.size(); i++)
+    {
+        if(m_procList[i].state != done) { return false;}
+    }
+    return true;
+}
+
+//////////////////////////////////////////////////////////
+
+bool ProcessManagement::checkIfRunning()
+{
+    for(Process& iterProc : m_procList)
+    {
+        if(iterProc.state == processing) { return true;}
+    }
+    return false;
 }
